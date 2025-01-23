@@ -1,4 +1,11 @@
 #include "systemcalls.h"
+#include <sys/types.h>
+#include <syslog.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,8 +23,15 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    openlog("Assignment 3p1", LOG_PID, LOG_USER);
+    syslog (LOG_DEBUG, "[do_system(%d)] started!", getpid());
 
-    return true;
+    int run_status = system(cmd);
+
+    syslog (LOG_DEBUG, "[do_system(%d)] finished!", getpid());
+    closelog();
+
+    return run_status == 0;
 }
 
 /**
@@ -40,6 +54,10 @@ bool do_exec(int count, ...)
     va_start(args, count);
     char * command[count+1];
     int i;
+
+    openlog("Assignment 3p1", LOG_PID, LOG_USER);
+    syslog (LOG_DEBUG, "[do_exec(%d)] started!", getpid());
+
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
@@ -48,6 +66,8 @@ bool do_exec(int count, ...)
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
     command[count] = command[count];
+
+    va_end(args);
 
 /*
  * TODO:
@@ -59,9 +79,40 @@ bool do_exec(int count, ...)
  *
 */
 
-    va_end(args);
+    pid_t pid = fork();
+    if (pid == -1) 
+    {
+        syslog (LOG_DEBUG, "[do_exec(%d)] fork() failed", getpid());
+        syslog (LOG_DEBUG, "[do_exec(%d)] returning false", getpid());
+        closelog();
+        return false;
+    }
 
-    return true;
+    if (pid == 0) 
+    {
+        syslog (LOG_DEBUG, "[do_exec(%d)] started child, doing execv(): ", getpid());
+        execv(command[0], command);
+
+        syslog (LOG_DEBUG, "[do_exec(%d)] execv() failed", getpid());
+        closelog();
+        exit(EXIT_FAILURE);
+    } else 
+        {
+        int status;
+        if (waitpid(pid, &status, 0) == -1) 
+        {
+            syslog (LOG_DEBUG, "[do_exec(%d)] waitpid(%d) failed", getpid(), pid);
+            syslog (LOG_DEBUG, "[do_exec(%d)] returning false", getpid());
+            closelog();
+            return false;
+        }
+
+        syslog (LOG_DEBUG, "[do_exec(%d)] waitpid(%d) returned status: %d", getpid(), pid, WEXITSTATUS(status));
+        syslog (LOG_DEBUG, "[do_exec(%d)] returning %d", getpid(), ((WIFEXITED(status) && WEXITSTATUS(status)) == 0));
+        closelog();
+        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
+
 }
 
 /**
@@ -92,8 +143,62 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    openlog("Assignment 3p1", LOG_PID, LOG_USER);
+    syslog (LOG_DEBUG, "[do_exec_redirect(%d)] started ",getpid());
 
-    va_end(args);
+	int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+	if (fd < 0)
+	{
+        syslog(LOG_ERR, "[do_exec_redirect(%d)] could not open file %s", getpid(), outputfile);
+        syslog(LOG_ERR, "[do_exec_redirect(%d)] EXIT_FAILURE", getpid());
+        closelog();
+        perror("can't open file");
+        exit(EXIT_FAILURE);
+	}
+    
+   pid_t pid = fork();
+    if (pid == -1) 
+    {
+        syslog (LOG_DEBUG, "[do_exec_redirect(%d)] fork() failed", getpid());
+        syslog (LOG_DEBUG, "[do_exec_redirect(%d)] returning false", getpid());
+        closelog();
+        perror("fork error");
+        return false;
+    }
 
-    return true;
+    if (pid == 0) 
+    {
+        if (dup2(fd, 1) < 0)
+        {
+            syslog(LOG_ERR, "do_exec_redirect(%d): could not open log file %s", getpid(), outputfile);
+            closelog();
+            perror("dup2 error!");
+            exit(EXIT_FAILURE);
+        }
+        close(fd);  
+
+        syslog (LOG_DEBUG, "[do_exec_redirect(%d)] started child, doing execv(): ", getpid());
+        execv(command[0], command);
+
+        syslog (LOG_DEBUG, "[do_exec_redirect(%d)] execv() failed", getpid());
+        closelog();
+        perror("execv error");
+        exit(EXIT_FAILURE);
+    } else 
+        {
+        int status;
+        if (waitpid(pid, &status, 0) == -1) 
+        {
+            syslog (LOG_DEBUG, "[do_exec_redirect(%d)] waitpid(%d) failed", getpid(), pid);
+            syslog (LOG_DEBUG, "[do_exec_redirect(%d)] returning false", getpid());
+            closelog();
+            perror("waitpid error");
+            return false;
+        }
+
+        syslog (LOG_DEBUG, "[do_exec_redirect(%d)] waitpid(%d) returned status: %d", getpid(), pid, WEXITSTATUS(status));
+        syslog (LOG_DEBUG, "[do_exec_redirect(%d)] returning %d", getpid(), ((WIFEXITED(status) && WEXITSTATUS(status)) == 0));
+        closelog();
+        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
 }
