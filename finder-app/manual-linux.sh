@@ -1,6 +1,7 @@
 #!/bin/bash
 # Script outline to install and build kernel.
 # Author: Siddhant Jajoo.
+# The script is based on instructions provided in the assignment 3 part 2.
 
 set -e
 set -u
@@ -34,10 +35,22 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     echo "Checking out version ${KERNEL_VERSION}"
     git checkout ${KERNEL_VERSION}
 
-    # TODO: Add your kernel build steps here
+    # Adding kernel build steps
+    # Make sure the following apps are installed: make build-essential libncurses-dev bison flex libssl-dev libelf-dev qemu 
+    # Deep clean the kernel source
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
+    # Configure the default configuration
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
+    # Building the kernel image
+    make -j16 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
+    # Building the kernel modules
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
+    # Building the device tree blobs
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
 echo "Adding the Image in outdir"
+cp -a ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -47,7 +60,8 @@ then
     sudo rm  -rf ${OUTDIR}/rootfs
 fi
 
-# TODO: Create necessary base directories
+# Creating necessary base directories
+mkdir -p ${OUTDIR}/rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,var/log,usr/{bin,sbin}}
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
@@ -55,26 +69,61 @@ then
 git clone git://busybox.net/busybox.git
     cd busybox
     git checkout ${BUSYBOX_VERSION}
-    # TODO:  Configure busybox
+    # Configuring busybox
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} distclean
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
 else
     cd busybox
 fi
 
-# TODO: Make and install busybox
+# Making and installing busybox
+make -j16 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
+make -j16 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} CONFIG_PREFIX=${OUTDIR}/rootfs install
 
+# Checking the library dependencies
+cd ${OUTDIR}/rootfs
 echo "Library dependencies"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
-# TODO: Add library dependencies to rootfs
+# Adding library dependencies to rootfs
+SYSROOT=$(${CROSS_COMPILE}gcc -print-sysroot)
+cp -L $SYSROOT/lib/ld-linux-aarch64.so.1 lib
+cp -L $SYSROOT/lib64/libm.so.6 lib64
+cp -L $SYSROOT/lib64/libresolv.so.2 lib64
+cp -L $SYSROOT/lib64/libc.so.6 lib64
 
-# TODO: Make device nodes
+# Making device nodes for console and null
+cd ${OUTDIR}/rootfs
+sudo mknod -m 666 dev/null c 1 3
+sudo mknod -m 600 dev/console c 5 1
 
-# TODO: Clean and build the writer utility
+# Cleaning and building the writer utility
+cd "$FINDER_APP_DIR"
+make clean
+make CROSS_COMPILE=${CROSS_COMPILE}
 
-# TODO: Copy the finder related scripts and executables to the /home directory
+# Copying the finder related scripts and executables to the /home directory
 # on the target rootfs
+cp ./writer.sh ${OUTDIR}/rootfs/home
+cp ./autorun-qemu.sh ${OUTDIR}/rootfs/home
+cp ./finder.sh ${OUTDIR}/rootfs/home
+cp ./finder-test.sh ${OUTDIR}/rootfs/home
+cp ./Makefile ${OUTDIR}/rootfs/home
+cp ./writer.c ${OUTDIR}/rootfs/home
+cp -L -r ./conf ${OUTDIR}/rootfs/home
+cp ./writer ${OUTDIR}/rootfs/home
+# Copying the start-qemu scripts to the output directory
+# Make sure you have installed qemu-system-aarch64, qemu
+cp ./start-qemu-app.sh ${OUTDIR}
+cp ./start-qemu-terminal.sh ${OUTDIR}
 
-# TODO: Chown the root directory
 
-# TODO: Create initramfs.cpio.gz
+# Chown-ing the root directory
+cd ${OUTDIR}/rootfs
+sudo chown -R root:root *
+
+# Creating initramfs.cpio.gz
+find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
+cd ..
+gzip -f initramfs.cpio
